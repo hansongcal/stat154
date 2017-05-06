@@ -1,0 +1,176 @@
+---
+title: "stat 154 final"
+author: "sheep."
+date: "fri 05.05.17"
+output: 
+  html_document:
+    fig_height: 3
+    fig_width: 5
+---
+```{r}
+# Cross validation utility
+GetID = function(n = 116474, n_fold = 4) {
+  fold_id = rep(1:n_fold, 1 + n / n_fold)
+  fold_id = sample(fold_id, size = n)
+  fold_id = fold_id[1:n]
+  return(fold_id)
+}
+```
+
+```{r}
+library(tm)
+library(nnet)
+library(e1071)
+library(text2vec)
+library(data.table)
+library(glmnet)
+library(dplyr)
+library(jsonlite)
+library(MASS)
+library(ggplot2)
+
+review_train = read.csv('yelp_academic_dataset_review_train.csv')
+stopWords = c(stopwords("en"), "") 
+review_train = review_train[,c("business_id", "review_id", "text", "stars")]
+review_train$stars <- review_train$stars
+review_train$text <- as.character(review_train$text)
+review_train$review_id <- as.character(review_train$review_id)
+
+business_train = read.csv('yelp_academic_dataset_business_train.csv')
+business_test = read.csv('yelp_academic_dataset_business_test.csv')
+business_test$business_id = as.character(business_test$business_id)
+
+checkin.data = read.csv('yelp_academic_dataset_checkin.csv')
+checkin.data$time = as.character(checkin.data$time)
+checkin.data$n = nchar(checkin.data$time)
+checkin.data$business_id = as.character(checkin.data$business_id)
+
+business_test_ext <- business_test %>% inner_join(checkin.data, business_id = "business_id")
+
+################## Data wraggling
+
+setDT(review_train)
+setkey(review_train, review_id)
+set.seed(2017L)  
+all_ids = review_train$review_id
+train_ids = sample(all_ids, 80000)  
+test_ids = setdiff(all_ids, train_ids)  
+train = review_train
+
+fold_id = GetID()
+
+
+prep_fun = tolower  
+tok_fun = word_tokenizer  
+it_train = itoken(train$text, preprocessor = prep_fun, tokenizer = tok_fun, ids = train$review_id, progressbar = FALSE)
+vocab = create_vocabulary(it_train, stopwords = stopWords)
+pruned_vocab = prune_vocabulary(vocab, term_count_min = 10, doc_proportion_max = 0.5, doc_proportion_min = 0.003)
+vectorizer = vocab_vectorizer(pruned_vocab)
+dtm_train = create_dtm(it_train, vectorizer)
+identical(rownames(dtm_train), train$review_id)
+
+NFOLDS = 4
+
+##################### Logistic
+
+make.prediction <- function(pred) {
+    round(pred[, 1, 1] + 2 * pred[, 2, 1] + 3 * pred[, 3, 1] + 4 * pred[, 4, 1] + 5 * pred[, 5, 1])
+}
+# Cross validation
+cv.res <- list()
+
+n = 10
+x = dtm_train
+y = train[['stars']]
+for (i in 1:n) {
+  test.idx = ((i-1) * 10000 + 1):((i-1) * 10000 + 10000)
+  train.idx = setdiff(1:100000, test.idx)
+  fit = glm(y[train.idx] ~ x[train.idx,], family = gaussian)
+  pred = predict(fit, x[test.idx,])
+  pred.result = make.prediction(pred)
+  cv.res[[i]] = data.frame(pred.result, y[test.idx])
+}
+cv.logistic(n = 1)
+
+glmnet_classifier = cv.glmnet(x = dtm_train, y = train[['stars']],   
+                              family = 'multinomial',   
+                              # L1 penalty  
+                              alpha = 1,  
+                              # interested in the area under ROC curve  
+                              type.measure = "auc",  
+                              # 5-fold cross-validation  
+                              nfolds = NFOLDS,  
+                              # high value is less accurate, but has faster training  
+                              thresh = 1e-3,  
+                              # again lower number of iterations for faster training  
+                              maxit = 1e2)  
+plot(glmnet_classifier)
+it_test = test$text %>%
+  prep_fun %>%
+  tok_fun %>%
+  itoken(ids = test$review_id,
+         # turn off progressbar because it won't look nice in rmd
+         progressbar = FALSE)
+dtm_test = create_dtm(it_test, vectorizer)
+preds = predict(glmnet_classifier, dtm_test, type = 'response')
+make.prediction <- function(pred) {
+    pred[, 1, 1] + 2 * pred[, 2, 1] + 3 * pred[, 3, 1] + 4 * pred[, 4, 1] + 5 * pred[, 5, 1]
+}
+pred.result <- make.prediction(preds)
+head(pred.result)
+
+###################### SVM Model
+svm.model <- svm(train[['stars']] ~ dtm_train)
+
+
+###################### LM
+lm.model <- lm(train[['stars']] ~ dtm_train)
+
+###################### LDA
+lda.model <- lda(train[['stars']] ~ dtm_train)
+
+
+
+####################### Result on test set
+train = review_train
+it_train = itoken(train$text, preprocessor = prep_fun, tokenizer = tok_fun, ids = train$review_id, progressbar = FALSE)
+vocab = create_vocabulary(it_train, stopwords = stopWords)
+pruned_vocab = prune_vocabulary(vocab, term_count_min = 10, doc_proportion_max = 0.5, doc_proportion_min = 0.003)
+vectorizer = vocab_vectorizer(pruned_vocab)
+dtm_train = create_dtm(it_train, vectorizer)
+
+final.classifier = cv.glmnet(x = dtm_train, y = train[['stars']],   
+                              family = 'multinomial',   
+                              # L1 penalty  
+                              alpha = 1,  
+                              # interested in the area under ROC curve  
+                              type.measure = "auc",  
+                              # 5-fold cross-validation  
+                              nfolds = NFOLDS,  
+                              # high value is less accurate, but has faster training  
+                              thresh = 1e-3,  
+                              # again lower number of iterations for faster training  
+                              maxit = 1e3)  
+
+review_test = read.csv("yelp_academic_dataset_review_test.csv")
+review_test$business_id = as.character(review_test$business_id)
+review_test = review_test[,c("business_id", "review_id", "text")]
+it_test = review_test$text %>%   
+  prep_fun %>%   
+  tok_fun %>%   
+  itoken(ids = review_test$review_id,   
+         # turn off progressbar because it won't look nice in rmd  
+         progressbar = FALSE)  
+
+dtm_test = create_dtm(it_test, vectorizer)
+preds = predict(final.classifier, dtm_test, type = 'response')
+pred.result <- make.prediction(preds)
+dim(test)
+test.business <- read.csv("yelp_academic_dataset_business_test.csv")
+test.business$business_id <- as.character(test.business$business_id)
+review_test$stars = pred.result
+res = review_test %>% group_by(business_id) %>% summarise(stars = mean(stars))
+test.result <- test.business %>% left_join(res, business_id = "business_id")
+test.result <- test.result %>% dplyr::select(business_id, stars)
+write.table(test.result, "result4.csv", sep = ",", row.names = FALSE)
+```
