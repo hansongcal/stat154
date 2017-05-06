@@ -119,23 +119,11 @@ make.prediction <- function(pred) {
 pred.result <- make.prediction(preds)
 head(pred.result)
 
-###################### SVM Model
-svm.model <- svm(train[['stars']] ~ dtm_train)
-
-
-###################### LM
-lm.model <- lm(train[['stars']] ~ dtm_train)
-
-###################### LDA
-lda.model <- lda(train[['stars']] ~ dtm_train)
-
-
-
 ####################### Result on test set
 train = review_train
 it_train = itoken(train$text, preprocessor = prep_fun, tokenizer = tok_fun, ids = train$review_id, progressbar = FALSE)
 vocab = create_vocabulary(it_train, stopwords = stopWords)
-pruned_vocab = prune_vocabulary(vocab, term_count_min = 10, doc_proportion_max = 0.5, doc_proportion_min = 0.003)
+pruned_vocab = prune_vocabulary(vocab, term_count_min = 10, doc_proportion_max = 0.5, doc_proportion_min = 0.004)
 vectorizer = vocab_vectorizer(pruned_vocab)
 dtm_train = create_dtm(it_train, vectorizer)
 
@@ -150,7 +138,7 @@ final.classifier = cv.glmnet(x = dtm_train, y = train[['stars']],
                               # high value is less accurate, but has faster training  
                               thresh = 1e-3,  
                               # again lower number of iterations for faster training  
-                              maxit = 1e3)  
+                              maxit = 2e3)  
 
 review_test = read.csv("yelp_academic_dataset_review_test.csv")
 review_test$business_id = as.character(review_test$business_id)
@@ -172,5 +160,5 @@ review_test$stars = pred.result
 res = review_test %>% group_by(business_id) %>% summarise(stars = mean(stars))
 test.result <- test.business %>% left_join(res, business_id = "business_id")
 test.result <- test.result %>% dplyr::select(business_id, stars)
-write.table(test.result, "result4.csv", sep = ",", row.names = FALSE)
+write.table(test.result, "result6.csv", sep = ",", row.names = FALSE)
 ```
